@@ -18,7 +18,7 @@ fn main() {
 
                 println!("accepted new connection");
                 for _ in 0..=1 {
-                    _stream.read_to_string(&mut buf).unwrap();
+                    // _stream.read_to_string(&mut buf).unwrap();
                     _stream.write(b"+PONG\r\n").unwrap();
                 }
             }
