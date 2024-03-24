@@ -2,7 +2,6 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    path::Iter,
 };
 
 fn main() {
@@ -24,7 +23,7 @@ fn main() {
         // Pick up new connections
         match listener.accept() {
             Ok((mut _stream, _)) => {
-                println!("got connection");
+                // println!("got connection");
                 _stream.set_nonblocking(true).unwrap();
                 streams.push(_stream);
             }
@@ -34,10 +33,17 @@ fn main() {
         // Read from and respond to connection if read
         for (idx, mut stream) in &mut streams.iter().enumerate() {
             match stream.read(&mut buf) {
-                Ok(_) => {
-                    println!("Read from stream, responding!");
-                    stream.write(b"+PONG\r\n").unwrap();
-                    stream.flush().unwrap();
+                Ok(n) => {
+                    if n > 0 {
+                        // println!("Read from stream, responding!");
+                        match stream.write(b"+PONG\r\n") {
+                            Ok(_) => stream.flush().unwrap(),
+                            Err(_) => {
+                                stream.shutdown(std::net::Shutdown::Both).unwrap();
+                                to_drop.push(idx);
+                            }
+                        }
+                    }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
                 Err(e) => {
