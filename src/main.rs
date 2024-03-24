@@ -31,13 +31,12 @@ fn main() {
             Err(_) => {}
         }
 
-        // Read from and respond to connection if ready
-        let mut i = 0;
+        // Read from and respond to connection if read
         for (idx, mut stream) in &mut streams.iter().enumerate() {
             match stream.read(&mut buf) {
                 Ok(_) => {
                     println!("Read from stream, responding!");
-                    stream.write(b"PONG\r\n").unwrap();
+                    stream.write(b"+PONG\r\n").unwrap();
                     stream.flush().unwrap();
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
@@ -47,7 +46,6 @@ fn main() {
                     to_drop.push(idx);
                 }
             }
-            i += 1;
         }
 
         // clear streams set for removal
