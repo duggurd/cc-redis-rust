@@ -1,7 +1,8 @@
 // Uncomment this block to pass the first stage
 use std::{
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
+    path::Iter,
 };
 
 fn main() {
@@ -10,23 +11,48 @@ fn main() {
 
     // Uncomment this block to pass the first stage
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    listener.set_nonblocking(true).unwrap();
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut _stream) => {
-                let mut buf = String::new();
+    let mut streams: Vec<TcpStream> = Vec::new();
 
-                println!("accepted new connection");
+    let mut to_drop = Vec::new();
 
-                for _ in 0..=1 {
-                    _stream.read_to_string(&mut buf).unwrap();
-                    _stream.write(b"+PONG\r\n").unwrap();
-                    _stream.flush().unwrap();
+    // Main event loop
+    loop {
+        let mut buf: [u8; 1024] = [0; 1024];
+
+        // Pick up new connections
+        match listener.accept() {
+            Ok((mut _stream, _)) => {
+                println!("got connection");
+                _stream.set_nonblocking(true).unwrap();
+                streams.push(_stream);
+            }
+            Err(_) => {}
+        }
+
+        // Read from and respond to connection if ready
+        let mut i = 0;
+        for (idx, mut stream) in &mut streams.iter().enumerate() {
+            match stream.read(&mut buf) {
+                Ok(_) => {
+                    println!("Read from stream, responding!");
+                    stream.write(b"PONG\r\n").unwrap();
+                    stream.flush().unwrap();
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                Err(e) => {
+                    println!("Io error: {}", e);
+                    stream.shutdown(std::net::Shutdown::Both).unwrap();
+                    to_drop.push(idx);
                 }
             }
-            Err(e) => {
-                println!("error: {}", e);
-            }
+            i += 1;
+        }
+
+        // clear streams set for removal
+        while let Some(idx) = to_drop.pop() {
+            streams.remove(idx);
         }
     }
 }
