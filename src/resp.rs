@@ -1,13 +1,7 @@
-use std::{
-    error::Error,
-    fmt::{format, Display},
-    io::Read,
-    iter::Peekable,
-    str::{Chars, Split},
-};
+use std::{error::Error, fmt::Display, iter::Peekable};
 
 #[derive(Debug, PartialEq)]
-enum RespValue {
+pub enum RespValue {
     Array(Vec<RespValue>),
     BulkString(String),
     SimpleString(String),
@@ -15,14 +9,75 @@ enum RespValue {
     Boolean(bool),
     SimpleError(String),
     // Error(RespError),
-    None,
+    Nil,
     Eof,
 }
 
-type RespParseResult = Result<RespValue, RespError>;
+impl RespValue {
+    pub fn serialize_value(&self) -> Result<String, RespError> {
+        let serialized = match self {
+            RespValue::SimpleString(s) => RespValue::serialize_simple_string(s),
+            RespValue::Integer(i) => RespValue::serialize_int(i),
+            RespValue::BulkString(s) => RespValue::serialize_bulk_string(s),
+            RespValue::Boolean(b) => RespValue::serialize_boolean(b),
+            RespValue::Array(ref a) => RespValue::serialize_array(a)?,
+            RespValue::SimpleError(e) => RespValue::serialize_simple_error(e),
+            RespValue::Nil => {
+                todo!();
+            }
+            RespValue::Eof => {
+                todo!();
+            }
+        };
+
+        Ok(serialized)
+    }
+
+    pub fn serialize_int(i: &i64) -> String {
+        format!(":{}\r\n", i)
+    }
+
+    pub fn serialize_simple_string(s: &str) -> String {
+        format!("+{}\r\n", s)
+    }
+
+    pub fn serialize_bulk_string(s: &str) -> String {
+        format!("${}\r\n{}\r\n", s.len(), s)
+    }
+
+    pub fn serialize_boolean(b: &bool) -> String {
+        let v = match b {
+            true => 't',
+            false => 'f',
+        };
+
+        format!("#{}\r\n", v)
+    }
+
+    pub fn serialize_simple_error(e: &str) -> String {
+        format!("-{}\r\n", e)
+    }
+
+    pub fn serialize_array(a: &Vec<RespValue>) -> Result<String, RespError> {
+        let parts = a
+            .iter()
+            .map(|v| RespValue::serialize_value(v))
+            .collect::<Result<Vec<String>, _>>()?
+            .join("");
+
+        Ok(format!("*{}\r\n{}", a.len(), parts))
+    }
+
+    pub fn serialize(&mut self) -> Result<Vec<u8>, RespError> {
+        let serialized = self.serialize_value()?;
+        Ok(serialized.as_bytes().to_vec())
+    }
+}
+
+pub type RespParseResult = Result<RespValue, RespError>;
 
 #[derive(Debug, PartialEq)]
-struct RespError {
+pub struct RespError {
     msg: String,
     idx: usize,
     char: char,
@@ -43,7 +98,7 @@ impl Display for RespError {
 /// Built on a iterator
 ///
 /// Parsing happens step-wise, and methods reflect this as they are broken down into common operators
-struct RespParser<I>
+pub struct RespParser<I>
 where
     I: Iterator<Item = char>,
 {
@@ -101,7 +156,7 @@ impl<I: Iterator<Item = char>> RespParser<I> {
             None => return self.unexpected_eof(),
         };
 
-        Ok(RespValue::None)
+        Ok(RespValue::Nil)
     }
 
     /// Parse an arbitraty constant
@@ -358,278 +413,76 @@ pub mod test {
             ])
         );
     }
+
+    #[test]
+    fn serialize_int() {
+        assert_eq!(
+            b":10\r\n".to_vec(),
+            RespValue::Integer(10).serialize().unwrap()
+        );
+
+        assert_eq!(
+            b":-24\r\n".to_vec(),
+            RespValue::Integer(-24).serialize().unwrap()
+        )
+    }
+
+    #[test]
+    fn serialize_boolean() {
+        assert_eq!(
+            b"#t\r\n".to_vec(),
+            RespValue::Boolean(true).serialize().unwrap()
+        );
+        assert_eq!(
+            b"#f\r\n".to_vec(),
+            RespValue::Boolean(false).serialize().unwrap()
+        );
+    }
+
+    #[test]
+    fn serialize_simple_string() {
+        assert_eq!(
+            b"+Hello World\r\n".to_vec(),
+            RespValue::SimpleString("Hello World".into())
+                .serialize()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn serialize_bulk_string() {
+        assert_eq!(
+            b"$2\r\nOK\r\n".to_vec(),
+            RespValue::BulkString("OK".into()).serialize().unwrap()
+        )
+    }
+    #[test]
+    fn serialize_array() {
+        assert_eq!(
+            b"*2\r\n:32\r\n:-5\r\n".to_vec(),
+            RespValue::Array(vec![RespValue::Integer(32), RespValue::Integer(-5)])
+                .serialize()
+                .unwrap()
+        )
+    }
+
+    #[test]
+    fn serialize_nested_array() {
+        assert_eq!(
+            b"*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Hello\r\n-World\r\n".to_vec(),
+            RespValue::Array(vec![
+                RespValue::Array(vec![
+                    RespValue::Integer(1),
+                    RespValue::Integer(2),
+                    RespValue::Integer(3),
+                ]),
+                RespValue::Array(vec![
+                    RespValue::SimpleString("Hello".into()),
+                    RespValue::SimpleError("World".into())
+                ])
+            ])
+            .serialize()
+            .unwrap()
+        )
+    }
 }
-
-// #[derive(PartialEq, Debug)]
-// enum SerializationError {
-//     // no data identifier in expected place
-//     NoDatatype,
-
-//     // string format is invalid
-//     InvalidString,
-
-//     //invalid resp serialization
-//     InvalidResp,
-
-//     // Array contains no item count
-//     ArrayinvalidItemCount,
-
-//     InvalidInteger,
-
-//     InvalidBoolean,
-
-//     InvalidBulkString,
-
-//     BadLength,
-
-//     MissigStringContent,
-// }
-
-// fn deserialize_resp(data: &str) -> RespValue {
-//     match &data[0..1] {
-//         "+" => parse_simple_str(&data[1..]),
-//         "*" => parse_array(&data[1..]),
-//         "$" => parse_bulk_str(&data[1..]),
-//         // '-' => parse_error(chars),
-//         ":" => parse_int(&data[1..]),
-//         "#" => parse_boolean(&data[1..]),
-//         // ',' => parse_double(chars),
-//         // '(' => parse_big_numbers(chars),
-//         // '!' => parse_bulk_errors(chars),
-//         // '=' => parse_verbatim_strings(chars),
-//         // '%' => parse_maps(chars),
-//         // '~' => parse_sets(chars),
-//         // '>' => parse_pushes(chars),
-
-//         // try inline parsing
-//         _ => RespValue::Error(SerializationError::NoDatatype),
-//     }
-// }
-
-// fn parse_simple_str(data: &str) -> RespValue {
-//     if data.chars().any(|c| c == '\r' || c == '\n') {
-//         return RespValue::Error(SerializationError::InvalidString);
-//     }
-
-//     RespValue::SimpleString(data.into())
-// }
-
-// fn parse_array(data: &str) -> RespValue {
-//     if &data[data.len() - 2..] != "\r\n" {
-//         return RespValue::Error(SerializationError::InvalidResp);
-//     }
-
-//     let data = &data[..data.len() - 2];
-
-//     let mut items = data.split("\r\n");
-
-//     let item_count: usize = match items.next().unwrap().parse() {
-//         Ok(v) => v,
-//         Err(_) => return Resp::Error(SerializationError::ArrayinvalidItemCount),
-//     };
-
-//     if item_count == 0 {
-//         return Resp::Array(Vec::new());
-//     }
-
-//     let values: Vec<RespValue> = items.map(|v| deserialize_resp(v)).collect();
-//     RespValue::Array(values)
-// }
-
-// fn parse_bulk_str(data: &str) -> RespValue {
-//     let mut parts = data.split("\r\n");
-
-//     let size_str = match parts.next() {
-//         Some(v) => v,
-//         None => return RespValue::Error(SerializationError::InvalidBulkString),
-//     };
-
-//     let size: usize = match size_str.parse() {
-//         Ok(v) => v,
-//         Err(_) => return RespValue::Error(SerializationError::InvalidBulkString),
-//     };
-
-//     let str_content = match parts.next() {
-//         Some(v) => v,
-//         None => return RespValue::Error(SerializationError::MissigStringContent),
-//     };
-
-//     if str_content.len() != size {
-//         return RespValue::Error(SerializationError::BadLength);
-//     }
-
-//     RespValue::BulkString(str_content.to_string())
-// }
-
-// fn parse_error(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_int(data: &str) -> RespValue {
-//     match &data[0..1] {
-//         "+" => match data[1..].parse() {
-//             Ok(v) => RespValue::Integer(v),
-//             Err(_) => RespValue::Error(SerializationError::InvalidInteger),
-//         },
-//         "-" => match data[..].parse() {
-//             Ok(v) => RespValue::Integer(v),
-//             Err(_) => RespValue::Error(SerializationError::InvalidInteger),
-//         },
-//         _ => match data[..].parse() {
-//             Ok(v) => RespValue::Integer(v),
-//             Err(_) => RespValue::Error(SerializationError::InvalidInteger),
-//         },
-//     }
-// }
-
-// fn parse_boolean(data: &str) -> RespValue {
-//     match data.to_lowercase().as_str() {
-//         "true" => RespValue::Boolean(true),
-//         "false" => RespValue::Boolean(false),
-//         _ => RespValue::Error(SerializationError::InvalidBoolean),
-//     }
-// }
-
-// fn parse_nulls(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_double(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_big_numbers(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_bulk_errors(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_verbatim_strings(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_maps(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_sets(data: Chars) {
-//     todo!()
-// }
-
-// fn parse_pushes(data: Chars) {
-//     todo!()
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     #[test]
-//     fn parse_simple_strings() {
-//         assert_eq!(deserialize_resp("+OK"), Resp::SimpleString("OK".into()));
-
-//         assert_eq!(
-//             deserialize_resp("+A larger string"),
-//             Resp::SimpleString("A larger string".into())
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("+Some string\n"),
-//             Resp::Error(SerializationError::InvalidString)
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("+Some strin\rg2"),
-//             Resp::Error(SerializationError::InvalidString)
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("+another invalid_string\r"),
-//             Resp::Error(SerializationError::InvalidString)
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("invalid"),
-//             Resp::Error(SerializationError::NoDatatype)
-//         );
-//     }
-
-//     #[test]
-//     fn parse_simple_int() {
-//         assert_eq!(deserialize_resp(":1"), Resp::Integer(1));
-//         assert_eq!(deserialize_resp(":32"), Resp::Integer(32));
-//         assert_eq!(deserialize_resp(":112313"), Resp::Integer(112313));
-//         assert_eq!(deserialize_resp(":-12"), Resp::Integer(-12));
-//         assert_eq!(deserialize_resp(":+15"), Resp::Integer(15));
-//     }
-
-//     #[test]
-//     fn parse_boolean() {
-//         assert_eq!(deserialize_resp("#true"), Resp::Boolean(true));
-//         assert_eq!(deserialize_resp("#false"), Resp::Boolean(false));
-//         assert_eq!(
-//             deserialize_resp("#notaboolean"),
-//             Resp::Error(SerializationError::InvalidBoolean)
-//         );
-//     }
-
-//     #[test]
-//     fn parse_bulk_string() {
-//         assert_eq!(deserialize_resp("$2\r\nOK"), Resp::BulkString("OK".into()));
-
-//         assert_eq!(
-//             deserialize_resp("$44\r\nA quite long string that is quite long, yes!"),
-//             Resp::BulkString("A quite long string that is quite long, yes!".into())
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("$12\r\nwith \r and \n"),
-//             Resp::BulkString("with \r and \n".into())
-//         );
-
-//         assert_eq!(
-//             deserialize_resp("$10\r\nnop"),
-//             Resp::Error(SerializationError::BadLength)
-//         );
-//     }
-
-//     #[test]
-//     fn parse_array() {
-//         let empty_aray = "*0\r\n";
-//         let raw_array_1 = "*1\r\n+OK\r\n";
-//         let raw_array_2 = "*2\r\n:1\r\n:2\r\n";
-//         let raw_array_3 = "*2\r\n#true\r\n:10\r\n";
-
-//         let raw_array_4 = "*3\r\n#true\r\n:10\r\n$5\r\nhello\r\n";
-
-//         assert_eq!(
-//             deserialize_resp(empty_aray),
-//             Resp::Array(Vec::<Resp>::new())
-//         );
-
-//         assert_eq!(
-//             deserialize_resp(raw_array_1),
-//             Resp::Array(vec![Resp::SimpleString("OK".into())])
-//         );
-
-//         assert_eq!(
-//             deserialize_resp(raw_array_2),
-//             Resp::Array(vec![Resp::Integer(1), Resp::Integer(2)])
-//         );
-
-//         assert_eq!(
-//             deserialize_resp(raw_array_3),
-//             Resp::Array(vec![Resp::Boolean(true), Resp::Integer(10)])
-//         );
-
-//         assert_eq!(
-//             deserialize_resp(raw_array_4),
-//             Resp::Array(vec![
-//                 Resp::Boolean(true),
-//                 Resp::Integer(10),
-//                 Resp::BulkString("hello".into())
-//             ])
-//         );
-//     }
-// }
