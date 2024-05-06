@@ -8,7 +8,6 @@ pub enum RespValue {
     Integer(i64),
     Boolean(bool),
     SimpleError(String),
-    // Error(RespError),
     Nil,
     Eof,
 }
@@ -42,7 +41,12 @@ impl RespValue {
     }
 
     pub fn serialize_bulk_string(s: &str) -> String {
-        format!("${}\r\n{}\r\n", s.len(), s)
+        // Null bulk string string
+        if s.is_empty() {
+            String::from("$-1\r\n")
+        } else {
+            format!("${}\r\n{}\r\n", s.len(), s)
+        }
     }
 
     pub fn serialize_boolean(b: &bool) -> String {
@@ -58,10 +62,10 @@ impl RespValue {
         format!("-{}\r\n", e)
     }
 
-    pub fn serialize_array(a: &Vec<RespValue>) -> Result<String, RespError> {
+    pub fn serialize_array(a: &[RespValue]) -> Result<String, RespError> {
         let parts = a
             .iter()
-            .map(|v| RespValue::serialize_value(v))
+            .map(RespValue::serialize_value)
             .collect::<Result<Vec<String>, _>>()?
             .join("");
 
@@ -125,16 +129,13 @@ impl<I: Iterator<Item = char>> RespParser<I> {
 
     /// Unexpected EOF
     pub fn unexpected_eof(&mut self) -> RespParseResult {
-        self.err(format!("unexpected eof"))
+        self.err("unexpected eof".into())
     }
 
     /// Consume and return the next item in `char` iterator
     pub fn next(&mut self) -> Option<char> {
         self.idx += 1;
-        match self.chars.next() {
-            Some(c) => return Some(c),
-            None => None,
-        }
+        self.chars.next()
     }
 
     /// Pek at next `char` in iterator
@@ -199,7 +200,7 @@ impl<I: Iterator<Item = char>> RespParser<I> {
 
         self.correct_sep()?;
 
-        return Ok(RespValue::Integer(s.parse::<i64>().unwrap()));
+        Ok(RespValue::Integer(s.parse::<i64>().unwrap()))
     }
 
     /// Parse a boolean value
@@ -207,14 +208,14 @@ impl<I: Iterator<Item = char>> RespParser<I> {
         match self.next() {
             Some('f') => {
                 self.correct_sep()?;
-                return Ok(RespValue::Boolean(false));
+                Ok(RespValue::Boolean(false))
             }
             Some('t') => {
                 self.correct_sep()?;
-                return Ok(RespValue::Boolean(true));
+                Ok(RespValue::Boolean(true))
             }
-            Some(c) => return self.err(format!("invalid value for boolean: '{}'", c)),
-            None => return self.unexpected_eof(),
+            Some(c) => self.err(format!("invalid value for boolean: '{}'", c)),
+            None => self.unexpected_eof(),
         }
     }
 
@@ -231,7 +232,7 @@ impl<I: Iterator<Item = char>> RespParser<I> {
             }
         }
 
-        return Ok(RespValue::SimpleString(s));
+        Ok(RespValue::SimpleString(s))
     }
 
     /// Parse a bulk string
@@ -260,7 +261,7 @@ impl<I: Iterator<Item = char>> RespParser<I> {
 
         self.correct_sep()?;
 
-        return Ok(RespValue::BulkString(blk_string));
+        Ok(RespValue::BulkString(blk_string))
     }
 
     pub fn parse_array(&mut self) -> RespParseResult {
@@ -275,6 +276,8 @@ impl<I: Iterator<Item = char>> RespParser<I> {
             let v = self.parse_next()?;
             arr.push(v);
         }
+
+        // self.correct_sep()?;
 
         Ok(RespValue::Array(arr))
     }
@@ -296,7 +299,7 @@ impl<I: Iterator<Item = char>> RespParser<I> {
             Some('$') => self.parse_bulk_string(),
             Some('*') => self.parse_array(),
             Some('-') => self.parse_simple_error(),
-            Some(c) => return self.err(format!("invalid type identifier found: '{}'", c)),
+            Some(c) => self.err(format!("invalid type identifier found: '{}'", c)),
             // Expected EOF
             None => Ok(RespValue::Eof),
         }
@@ -412,6 +415,22 @@ pub mod test {
                 ])
             ])
         );
+    }
+
+    #[test]
+    fn test_parser() {
+        let mut parser = RespParser::new("*3\r\n+ECHO\r\n$2\r\nOK\r\n+test\r\n".chars());
+
+        let out = parser.parse_next().unwrap();
+
+        assert_eq!(
+            out,
+            RespValue::Array(vec![
+                RespValue::SimpleString("ECHO".into()),
+                RespValue::BulkString("OK".into()),
+                RespValue::SimpleString("test".into())
+            ])
+        )
     }
 
     #[test]
